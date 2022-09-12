@@ -84,6 +84,8 @@ win10专业版，串口调试助手：fireTools.exe，开发工具：AURIX Devel
 
 <img title="" src="./picture/LED灯.png" alt="" width="202" data-align="center">
 
+LED灯的初始化
+
 代码讲解
 
 ```c
@@ -96,44 +98,406 @@ win10专业版，串口调试助手：fireTools.exe，开发工具：AURIX Devel
 /*********************************************************************************************************************/
 /*------------------------------------------------------Macros-------------------------------------------------------*/
 /*********************************************************************************************************************/
-#define LED         &MODULE_P00,6                                              /* LED: Port, Pin definition            */
-#define WAIT_TIME   1000                                                     /* Wait time constant in milliseconds   */
+#define LED         &MODULE_P00,6   /*引脚定义*/                                           /* LED: Port, Pin definition            */
+#define WAIT_TIME   1000            /*延时时间*/                                      /* Wait time constant in milliseconds   */
 
 /*********************************************************************************************************************/
 /*---------------------------------------------Function Implementations----------------------------------------------*/
 /*********************************************************************************************************************/
 /* This function initializes the port pin which drives the LED */
+/*该函数初始化驱动 LED 的端口引脚*/
 void initLED(void)
 {
     /* Initialization of the LED used in this example */
+    /*本例中使用的 LED 的初始化*/
     IfxPort_setPinModeOutput(LED, IfxPort_OutputMode_pushPull, IfxPort_OutputIdx_general);
 
     /* Switch OFF the LED (low-level active) */
+    /*设置LED引脚为高电平*/
     IfxPort_setPinHigh(LED);
 }
 
 /* This function toggles the port pin and wait 500 milliseconds */
+/*此函数切换端口引脚并等待 500 毫秒*/
 void blinkLED(void)
 {
-    IfxPort_togglePin(LED);                                                     /* Toggle the state of the LED      */
+    IfxPort_togglePin(LED);      /*LED灯翻转*/                                              /* Toggle the state of the LED      */
     waitTime(IfxStm_getTicksFromMilliseconds(BSP_DEFAULT_TIMER, WAIT_TIME));    /* Wait 500 milliseconds            */
+}
+
+/*主函数调用部分*/
+#include "Blinky_LED.h"
+
+int core0_main(void)
+{
+    IfxCpu_enableInterrupts();
+
+    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
+     * Enable the watchdogs and service them periodically if it is required
+     */
+    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
+    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
+
+    /* Wait for CPU sync event */
+    IfxCpu_emitEvent(&g_cpuSyncEvent);
+    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
+
+    initLED();  /* 初始化LED引脚      */
+
+    while(1)
+    {
+        blinkLED(); /* Make the LED blink    LED灯闪烁-间隔0.5s       */
+    }
+    return (1);
 }
 ```
 
-
+这样就可以点亮 LED 灯或者配置基本的 IO 口。如果使用多核心也是如此调用初始化函数，把用户定义的线程放入 while(1) 中即可。
 
 ### 4.2、串口学习部分
 
-参考资料：
+参考资料：[UART communication via ASCLIN module (infineon.com)](https://www.infineon.com/dgdl/Infineon-AURIX_ASCLIN_UART_1_KIT_TC275_LK-TR-Training-v01_00-EN.pdf?fileId=5546d4627a0b0c7b017a5845b0422526)
+
+电路图如下：
+
+![](./picture/串口.png)
+
+代码讲解部分
+
+```c
+#include "IfxAsclin_Asc.h"
+#include "IfxCpu_Irq.h"
+#include "Bsp.h"
+
+
+/*********************************************************************************************************************/
+/*------------------------------------------------------Macros-------------------------------------------------------*/
+/*********************************************************************************************************************/
+#define UART_BAUDRATE           115200       /* 串口波特率 bit/s                  */
+
+#define UART_PIN_RX             IfxAsclin0_RXA_P14_1_IN /*串口接收引脚            */
+#define UART_PIN_TX             IfxAsclin0_TX_P14_0_OUT /* 串口发送引脚      */
+
+/* Definition of the interrupt priorities -定义串口中断的优先级*/
+#define INTPRIO_ASCLIN0_RX      18 
+#define INTPRIO_ASCLIN0_TX      19
+
+#define UART_RX_BUFFER_SIZE     64        /* 定义接收缓存区大小 */
+#define UART_TX_BUFFER_SIZE     64        /* 定义发送缓存区大小 */
+#define SIZE                    13        /* 字符串大小  */
+#define WAIT_TIME   1000                  /* 定义等待时间 */                                       /* Wait time constant in milliseconds   */
+
+/*********************************************************************************************************************/
+/*-------------------------------------------------Global variables--------------------------------------------------*/
+/*********************************************************************************************************************/
+
+IfxAsclin_Asc g_ascHandle;    //声明串口配置的结构体
+
+/* Declaration of the FIFOs parameters -定义FIFO的参数*/
+static uint8 g_ascTxBuffer[UART_TX_BUFFER_SIZE + sizeof(Ifx_Fifo) + 8];
+static uint8 g_ascRxBuffer[UART_RX_BUFFER_SIZE + sizeof(Ifx_Fifo) + 8];
+
+/* Definition of txData and rxData -定义发送和接收的数据缓存区*/
+uint8 g_txData[] = "Hello World!";
+uint8 g_rxData[SIZE] = {''};
+
+/* Size of the message - 发送信息的大小 */
+Ifx_SizeT g_count = sizeof(g_txData);  
+
+/*********************************************************************************************************************/
+/*---------------------------------------------Function Implementations----------------------------------------------*/
+/*********************************************************************************************************************/
+/* Adding of the interrupt service routines 添加中断服务程序-对应发送和接收中断设置的优先级*/
+IFX_INTERRUPT(asclin0TxISR, 0, INTPRIO_ASCLIN0_TX);
+void asclin0TxISR(void)
+{
+    IfxAsclin_Asc_isrTransmit(&g_ascHandle);   /* 中断发送函数 */
+}
+
+IFX_INTERRUPT(asclin0RxISR, 0, INTPRIO_ASCLIN0_RX);
+void asclin0RxISR(void)
+{
+    IfxAsclin_Asc_isrReceive(&g_ascHandle);  /* 中断接收函数 */
+}
+
+/* This function initializes the ASCLIN UART module -串口的初始化配置*/
+void init_ASCLIN_UART(void)
+{
+    /* Initialize an instance of IfxAsclin_Asc_Config with default values */
+    /*使用默认值初始化 IfxAsclin_Asc_Config 的实例*/
+    IfxAsclin_Asc_Config ascConfig;
+    IfxAsclin_Asc_initModuleConfig(&ascConfig, &MODULE_ASCLIN0);
+
+    /* Set the desired baud rate -设置波特率*/
+    ascConfig.baudrate.baudrate = UART_BAUDRATE;
+
+    /* ISR priorities and interrupt target -ISR 优先级和中断引脚（串口引脚）*/
+    ascConfig.interrupt.txPriority = INTPRIO_ASCLIN0_TX;
+    ascConfig.interrupt.rxPriority = INTPRIO_ASCLIN0_RX;
+    ascConfig.interrupt.typeOfService = IfxCpu_Irq_getTos(IfxCpu_getCoreIndex());
+
+    /* FIFO configuration -FIFO的配置*/
+    ascConfig.txBuffer = &g_ascTxBuffer;
+    ascConfig.txBufferSize = UART_TX_BUFFER_SIZE;
+    ascConfig.rxBuffer = &g_ascRxBuffer;
+    ascConfig.rxBufferSize = UART_RX_BUFFER_SIZE;
+
+    /* Pin configuration -引脚的配置*/
+    const IfxAsclin_Asc_Pins pins =
+    {
+        NULL_PTR,       IfxPort_InputMode_pullUp,     /* CTS 未用 */
+        &UART_PIN_RX,   IfxPort_InputMode_pullUp,     /* RX pin   接收引脚        */
+        NULL_PTR,       IfxPort_OutputMode_pushPull,  /* RTS未用*/
+        &UART_PIN_TX,   IfxPort_OutputMode_pushPull,  /* TX pin    发送引脚       */
+        IfxPort_PadDriver_cmosAutomotiveSpeed1   /*GPIO的速度设置*/
+    };
+    ascConfig.pins = &pins;
+    /* 使用上述参数初始化模块*/
+    IfxAsclin_Asc_initModule(&g_ascHandle, &ascConfig); 
+}
+
+/* This function sends and receives the string "Hello World!" */
+/*发送数据和接收数据，当RX和TX连接在一起*/
+void send_receive_ASCLIN_UART_message(void)
+{
+    IfxAsclin_Asc_write(&g_ascHandle, g_txData, &g_count, TIME_INFINITE);   /* Transmit data via TX */
+    IfxAsclin_Asc_read(&g_ascHandle, g_rxData, &g_count, TIME_INFINITE);    /* Receive data via RX  */
+}
+
+/* Function to transmit data over UART -使用串口发送数据*/
+void send_data(char *data, Ifx_SizeT length)
+{
+    /* Transmit data */
+    IfxAsclin_Asc_write(&g_ascHandle, data, &length, TIME_INFINITE);
+}
+
+/* Function to receive data over ASC -使用串口接收数据*/ 
+void receive_data(char *data, Ifx_SizeT length)
+{
+    /* Receive data */
+    IfxAsclin_Asc_read(&g_ascHandle, data, &length, TIME_INFINITE);
+}
+
+
+
+#include "Ifx_Types.h"
+#include "IfxCpu.h"
+#include "IfxScuWdt.h"
+#include "ASCLIN_UART.h"
+#include "ADC_Group_Scan.h"
+#include "GTM_TOM_PWM.h"
+IfxCpu_syncEvent g_cpuSyncEvent = 0;
+
+int core0_main(void)
+{
+    /* 此处为配置信息 不使用看门狗等可以不用更改 */
+//////////////////////////////////////////////////////////////////
+    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
+     * Enable the watchdogs and service them periodically if it is required
+     */
+    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
+    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
+
+    /* Wait for CPU sync event */
+    IfxCpu_emitEvent(&g_cpuSyncEvent);
+    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
+////////////////////////////////////////////////////////////////////////
+
+    init_ASCLIN_UART();                 /* 初始化串口                 */
+    send_receive_ASCLIN_UART_message(); /* 串口的发送和接收测试-未使用接收功能 */
+
+    while(1)
+    {
+    }
+    return (1);
+}
+```
+
+实验结果：串口调试助手显示 **Hello World!**
 
 ### 4.3、ADC 学习部分
 
+参考资料：[Auto Scan of ADC channel (infineon.com)](https://www.infineon.com/dgdl/Infineon-AURIX_ADC_Group_Scan_1_KIT_TC275_LK-TR-Training-v01_00-EN.pdf?fileId=5546d4627a0b0c7b017a58679bdf4c9f)
 
+电路图如下：
+
+<img title="" src="./picture/电位器.png" alt="" width="589" data-align="left">
+
+代码讲解和初始化过程
+
+```c
+#include "ADC_Group_Scan.h"  
+#include "ASCLIN_UART.h"   //与上文讲解的串口函数一致
+
+#define RX_LENGTH           1       /* Size of the expected input -未使用                      */
+#define TX_LENGTH           21      /* 设置发送数据缓存区的长度    */
+
+#define N_CHANNELS              1           /* 定义被使用的通过个数                       */
+#define ASCII_SHIFT             48          /* Shift in the ASCII table: '0', '1', '2'[...], start at value 48  */
+IfxVadc_Adc g_vadc;                         /* VADC 寄存器句柄                                        */
+IfxVadc_Adc_Group g_adcGroup;                   /* VADC 组寄存器的句柄                             */
+IfxVadc_Adc_Channel g_adcChannel[N_CHANNELS];   /* VADC 通道寄存器的句柄*/
+/* Define the used channels -定义的使用的通道*/
+IfxVadc_ChannelId g_vadcChannelIDs[] = {IfxVadc_ChannelId_0}; /* AN36: channel 0 of group 0                         */
+//                                      IfxVadc_ChannelId_1,  /* AN37: channel 1 of group 0          */
+//                                      IfxVadc_ChannelId_2,  /* AN38: channel 2 of group 0                         */
+//                                      IfxVadc_ChannelId_3}; /* AN39: channel 3 of group 0                         */
+
+
+
+
+/* VADC 模块和将使用的组的配置和初始化 */
+//ADC初始化
+void init_vadc(void)
+{
+    /*创建和初始化模块配置 */
+    IfxVadc_Adc_Config adcConf;                             /* 定义 VADC 模块的配置结构 */
+    IfxVadc_Adc_initModuleConfig(&adcConf, &MODULE_VADC);   /* 用默认值配置它*/
+
+    IfxVadc_Adc_initModule(&g_vadc, &adcConf);              /* 将配置应用到模块*/
+
+    /* 创建和初始化组配置 */
+    IfxVadc_Adc_GroupConfig adcGroupConf;                   /* 定义 VADC 组的配置结构*/
+    IfxVadc_Adc_initGroupConfig(&adcGroupConf, &g_vadc);    /* 用默认值配置它*/
+
+    /* Configuration of the group -VADC组的配置*/
+    adcGroupConf.groupId = IfxVadc_GroupId_0;               /*选择VADC组0 */
+    adcGroupConf.master = adcGroupConf.groupId;             /* 选择主组*/
+
+    adcGroupConf.arbiter.requestSlotScanEnabled = TRUE;     /* 启用扫描ADC各个通道*/
+    adcGroupConf.scanRequest.autoscanEnabled = TRUE;        /* 启用自动扫描模式*/
+
+    /* Enable all gates in "always" mode (no edge detection) 在“始终”模式下启用所有门（无边缘检测）*/
+    adcGroupConf.scanRequest.triggerConfig.gatingMode = IfxVadc_GatingMode_always;
+
+    IfxVadc_Adc_initGroup(&g_adcGroup, &adcGroupConf);      /* 将配置应用到组*/
+
+    /* Create and initialize the channels configuration 创建和初始化通道配置*/
+    uint32 chnIx;
+
+    /* Create channel configuration 创建通道配置*/
+    IfxVadc_Adc_ChannelConfig adcChannelConf[N_CHANNELS]; /* 定义 VADC 通道的配置结构 */
+
+    for(chnIx = 0; chnIx < N_CHANNELS; ++chnIx) //此处只使用了一个通道
+    {
+        IfxVadc_Adc_initChannelConfig(&adcChannelConf[chnIx], &g_adcGroup);     /* Fill it with default values      */
+
+        adcChannelConf[chnIx].channelId = g_vadcChannelIDs[chnIx];              /* Select the channel ID            */
+        adcChannelConf[chnIx].resultRegister = (IfxVadc_ChannelResult)(chnIx);  /* Use dedicated result register    */
+
+        /* 初始化通道 */
+        IfxVadc_Adc_initChannel(&g_adcChannel[chnIx], &adcChannelConf[chnIx]);
+
+        /* 将通道添加到扫描序列*/
+        uint32 enableChnBit = (1 << adcChannelConf[chnIx].channelId);   /*  设置对应的输入通道 */
+        uint32 mask = enableChnBit;                                     /* 参加的各组  */
+        IfxVadc_Adc_setScan(&g_adcGroup, enableChnBit, mask);           /* 扫描序列 */
+    }
+
+    /* Start the scan -开始读取VADC组中的各个ADC通道*/
+    IfxVadc_Adc_startScan(&g_adcGroup);
+}
+
+/* 获取和打印 VADC 转换 */
+void run_vadc(void)
+{
+    uint32 chnIx;
+
+    /* Get the VADC conversions -获取ADC的转换值*/
+    for(chnIx = 0; chnIx < N_CHANNELS; ++chnIx)   //每个通道依次计算得到ADC的数字量
+    {
+        Ifx_VADC_RES conversionResult;
+
+        /* Wait for a new valid result */
+        do
+        {
+            conversionResult = IfxVadc_Adc_getResult(&g_adcChannel[chnIx]);
+        } while(!conversionResult.B.VF); /*B 表示位域访问，VF 表示有效标志 */
+
+        /* 将ADC值使用UART发送 */
+        send_vadc(chnIx, conversionResult.B.RESULT);
+
+    }
+}
+
+/* Print, via UART, the VADC results after conversions */
+void send_vadc(uint32 chnIx, uint32 adcVal)
+{
+
+    //打印格式 Ch.x:xxxx,  V:x.xxx   
+    char str[TX_LENGTH] = {'C','h','.','X',':',' ','X','X','X','X',' ',' ','V',':','X','.','X','X','X','\n','\r'};  /* X to be replaced by correct values*/
+    uint32 num = 0;
+    num = adcVal * change_data;   //此时的值为ADC的电压值 = 数字量*转换值
+    str[3] = (char) chnIx + ASCII_SHIFT;                                        /* Channel index                    */
+
+    /* Turns the digital converted value into its ASCII characters, e.g. 1054 -> '1','0','5','4' */
+    /* 12-bits range value: 0-4095*/
+    //打印输出此时测量的数字量和转换得到的电压值
+    str[6] = (adcVal / 1000) + ASCII_SHIFT;                                     /* Thousands                        */
+    str[7] = ((adcVal % 1000) / 100) + ASCII_SHIFT;                             /* Hundreds                         */
+    str[8] = ((adcVal % 100) / 10) + ASCII_SHIFT;                               /* Tens                             */
+    str[9] = (adcVal % 10) + ASCII_SHIFT;                                       /* Units                            */
+    //此时的电压值 
+    str[14] = (num / 1000) + ASCII_SHIFT;                                     /* Thousands                        */
+    str[16] = ((num % 1000) / 100) + ASCII_SHIFT;                             /* Hundreds                         */
+    str[17] = ((num % 100) / 10) + ASCII_SHIFT;                               /* Tens                             */
+    str[18] = (num % 10) + ASCII_SHIFT;                                       /* Units                            */
+    //串口发送
+    send_data(str, TX_LENGTH);
+}
+
+
+#include "Ifx_Types.h"
+#include "IfxCpu.h"
+#include "IfxScuWdt.h"
+#include "ASCLIN_UART.h"  //此处头文件与串口讲解部分相同
+#include "ADC_Group_Scan.h"
+
+IfxCpu_syncEvent g_cpuSyncEvent = 0;
+
+int core0_main(void)
+{
+    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
+     * Enable the watchdogs and service them periodically if it is required
+     */
+    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
+    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
+
+    /* Wait for CPU sync event */
+    IfxCpu_emitEvent(&g_cpuSyncEvent);
+    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
+
+    init_vadc();                /* Initialize the VADC module */
+    init_ASCLIN_UART();         /* Initialize the module*/
+    IfxCpu_enableInterrupts();  /* Enable interrupts after initialization */
+
+    while(1)
+    {
+        run_vadc();             /* 得到ADC的转换值*/
+        waitTime(IfxStm_getTicksFromMilliseconds(BSP_DEFAULT_TIMER, 100));    /* Wait 100 milliseconds            */
+    }
+    return (1);
+}
+```
+
+实验结果：
 
 ### 4.4、PWM 学习部分
 
+参考资料：[GTM ATOM PWM (infineon.com)](https://www.infineon.com/dgdl/Infineon-AURIX_GTM_ATOM_PWM_1_KIT_TC275_LK-TR-Training-v01_00-EN.pdf?fileId=5546d4627a0b0c7b017a5842191924cf) 
 
+电路图如下：
+
+<img title="" src="./picture/LED灯.png" alt="" width="159" data-align="center">
+
+代码讲解部分
+
+LED 由端口 00 的引脚 5 驱动。引脚的状态由 GTM 的 TOM 定时器产生的 PWM 信号控制，也可以使用其他定时器产生 PWM 波对 LED 灯进行调光。
+
+通用定时器模块 (GTM) 是一种模块化定时器单元，旨在容纳许多定时器应用程序。
+
+内置定时器输出模块 (TOM)，可提供多达 16 个独立通道来生成输出信号。
+
+时钟管理单元 (CMU) 负责GTM 的时钟生成。固定时钟生成 (FXU) 是其子单元之一，它为GTM 模块（包括 TOM）提供五个预定义的不可配置时钟。
 
 ### 4.5、整合部分
-
-
