@@ -96,24 +96,28 @@ win10专业版，串口调试助手：fireTools.exe，开发工具：AURIX Devel
 
 <img title="" src="./picture/LED灯.png" alt="" width="202" data-align="center">
 
-LED灯的初始化
+LED灯初始化步骤
+
+LED灯的初始化使用函数 `IfxPort_setPinModeOutput()` 
+
+关闭 LED 灯 函数`IfxPort_setPinHigh()`
+
+LED 的状态可通过函数`IfxPort_togglePin()`
+
+延时函数`waitTime()`延时一秒钟
 
 代码讲解
 
 ```c
+/*Blinky_LED.c*/
 #include "IfxPort.h"   
 #include "Bsp.h"
-
-
 #define LED         &MODULE_P00,6   /*引脚定义*/                                           
 #define WAIT_TIME   1000            /*延时时间*/                           
 
-
-/* This function initializes the port pin which drives the LED */
 /*该函数初始化驱动 LED 的端口引脚*/
 void initLED(void)
 {
-    /* Initialization of the LED used in this example */
     /*本例中使用的 LED 的初始化*/
     IfxPort_setPinModeOutput(LED, IfxPort_OutputMode_pushPull, IfxPort_OutputIdx_general);
 
@@ -130,23 +134,12 @@ void blinkLED(void)
     waitTime(IfxStm_getTicksFromMilliseconds(BSP_DEFAULT_TIMER, WAIT_TIME));    
 }
 
-/*主函数调用部分*/
-#include "Blinky_LED.h"
-
+/*core0_main.c*/
 int core0_main(void)
 {
-    IfxCpu_enableInterrupts();
-
-    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable the watchdogs and service them periodically if it is required
+    /* 基本的芯片初始化操作-案例程序中通用的未改动
+     * ......
      */
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    /* Wait for CPU sync event */
-    IfxCpu_emitEvent(&g_cpuSyncEvent);
-    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
-
     initLED();  /* 初始化LED引脚      */
 
     while(1)
@@ -167,9 +160,26 @@ int core0_main(void)
 
 ![](./picture/串口.png)
 
+串口的配置
+
+用于 UART 通信的 ASCLIN 模块的配置在设置阶段完成
+通过使用以下内容初始化`IfxAsclin_Asc_Config`结构体的实例
+参数：
+`baudrate` - 以比特/秒为单位设置实际通信速度的结构
+`interrupt` - 要配置的结构：
+
+    发送和接收中断优先级（txPriority，rxPriority）
+    typeOfService – 定义哪个服务提供者负责处理中断，可以是任何可用的 CPU 或 DMA
+`pin` - 设置用于通信的 GPIO 端口引脚的结构体
+`rxBuffer`, `rxBufferSize`, `txBuffer`, `txBufferSize`– 配置将容纳的缓冲区传入/传出数据
+函数`IfxAsclin_Asc_initModuleConfig()`用 默认值和`IfxAsclin_Asc_initModule()`使用用户初始化模块配置
+
+调用`IfxAsclin_Asc_write()`和`IfxAsclin_Asc_read()`函数发送和接收串口数据
+
 代码讲解部分
 
 ```c
+/**/
 #include "IfxAsclin_Asc.h"
 #include "IfxCpu_Irq.h"
 #include "Bsp.h"
@@ -274,28 +284,12 @@ void receive_data(char *data, Ifx_SizeT length)
 }
 
 
-/* 主函数部分- */
-#include "Ifx_Types.h"
-#include "IfxCpu.h"
-#include "IfxScuWdt.h"
-#include "ASCLIN_UART.h"
-IfxCpu_syncEvent g_cpuSyncEvent = 0;
-
+/* core0_main.c*/
 int core0_main(void)
 {
-    /* 此处为配置信息 不使用看门狗等可以不用更改 */
-//////////////////////////////////////////////////////////////////
-    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable the watchdogs and service them periodically if it is required
+    /* 基本的芯片初始化操作-案例程序中通用的未改动
+     * ......
      */
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    /* Wait for CPU sync event */
-    IfxCpu_emitEvent(&g_cpuSyncEvent);
-    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
-////////////////////////////////////////////////////////////////////
-
     init_ASCLIN_UART();                 /* 初始化串口                 */
     send_receive_ASCLIN_UART_message(); /* 串口的发送和接收测试-未使用接收功能 */
 
@@ -308,8 +302,6 @@ int core0_main(void)
 
 实验结果：串口调试助手显示 **Hello World!**
 
-
-
 ### 4.3、ADC 学习部分
 
 参考资料：[Auto Scan of ADC channel (infineon.com)](https://www.infineon.com/dgdl/Infineon-AURIX_ADC_Group_Scan_1_KIT_TC275_LK-TR-Training-v01_00-EN.pdf?fileId=5546d4627a0b0c7b017a58679bdf4c9f)
@@ -317,6 +309,28 @@ int core0_main(void)
 电路图如下：
 
 <img title="" src="./picture/电位器.png" alt="" width="589" data-align="left">
+
+VADC的配置
+
+以下iLLD函数用于初始化: 头文件`IfxVadc_Adc.h`
+
+`IfxVadc_Adc_initModuleConfig()`使用默认值初始化模块结构
+
+`IfxVadc_Adc_initModule()`初始化VADC以预期的频率和校准运行
+
+`IfxVadc_Adc_initGroupConfig()`使用默认配置初始化组缓冲区
+
+`IfxVadc_Adc_initGroup()`初始化参数中指定的VADC组  
+
+需要在通道上进行循环来配置、初始化和设置它们。然后可以启动ADC。
+
+每个通道的初始化和配置是通过两个iLLD函数完成的:
+
+`IfxVadc_Adc_initChannelConfig()`，它使用默认通道配置初始化缓冲区
+
+`IfxVadc_Adc_initChannel()`，用户配置初始化指定的通道
+
+通道通过`IfxVadc_Adc_setScan()`和转换被添加到扫描序列中首先调用函数`IfxVadc_Adc_startScan()`
 
 代码讲解和初始化过程
 
@@ -439,26 +453,10 @@ void send_vadc(uint32 chnIx, uint32 adcVal)
 }
 
 
-#include "Ifx_Types.h"
-#include "IfxCpu.h"
-#include "IfxScuWdt.h"
-#include "ASCLIN_UART.h"  //此处头文件与串口讲解部分相同
-#include "ADC_Group_Scan.h"
-
-IfxCpu_syncEvent g_cpuSyncEvent = 0;
-
+/*core0_main.c文件中的配置*/
 int core0_main(void)
-{
-    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable the watchdogs and service them periodically if it is required
-     */
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    /* Wait for CPU sync event */
-    IfxCpu_emitEvent(&g_cpuSyncEvent);
-    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
-
+{  
+    /*基本cpu的初始化 通用*/
     init_vadc();                /* Initialize the VADC module */
     init_ASCLIN_UART();         /* Initialize the module*/
     IfxCpu_enableInterrupts();  /* Enable interrupts after initialization */
@@ -484,8 +482,6 @@ Ch.0: 3503  V:2.822
 Ch.0: 3496  V:2.816
 ```
 
-
-
 ### 4.4、PWM 学习部分
 
 参考资料：[GTM ATOM PWM (infineon.com)](https://www.infineon.com/dgdl/Infineon-AURIX_GTM_ATOM_PWM_1_KIT_TC275_LK-TR-Training-v01_00-EN.pdf?fileId=5546d4627a0b0c7b017a5842191924cf) 
@@ -503,6 +499,40 @@ LED 由端口 00 的引脚 5 驱动。引脚的状态由 GTM 的 TOM 定时器�
 内置定时器输出模块 (TOM)，可提供多达 16 个独立通道来生成输出信号。
 
 时钟管理单元 (CMU) 负责GTM 的时钟生成。固定时钟生成 (FXU) 是其子单元之一，它为GTM 模块（包括 TOM）提供五个预定义的不可配置时钟。
+
+**配置ATOM**
+
+ATOM的配置在设置阶段通过调用初始化完成一次
+
+函数`initGtmAtomPwm()`包含以下步骤:
+
+调用函数`IfxGtm_enable()`来启用GTM
+
+使用该功能将CMU时钟0的频率设置为1mhz  `IfxGtm_Cmu_SetClkFrequency ()`
+
+调用函数`IfxGtm_Cmu_enableClocks()`使CMU时钟为0
+
+函数`IfxGtm_Atom_Pwm_initConfig()`初始化结构的一个函数`IfxGtm_Atom_Pwm_Config`及其默认值。
+
+`IfxGtm_Atom_Pwm_Config`结构允许将以下参数设置为初始化
+
+模块:
+
+    `atom` -选择正在计数的atom(在本例中为atom1)
+
+   `atomChannel` -选择驱动LED的通道(在本例中为channel 4)
+
+例子)
+
+    `period`—将PWM信号的周期设置为所需值
+
+    `pin.outputPin` -选择LED作为输出引脚
+
+    `synchronousUpdateEnable` -开启同步更新定时器功能
+
+配置之后，函数`IfxGtm_Atom_Pwm_init()`初始化并激活(来重新初始化和重新激活ATOM)
+
+函数`IfxGtm_Atom_Pwm_start()`启动PWM
 
 ```c
 /*GTM_TOM_PWM.c/
@@ -582,30 +612,10 @@ void setDutyCycle(uint8 led_num, uint32 dutyCycle)
 
 
 /*Cpu0_main.c*/
-#include "Ifx_Types.h"
-#include "IfxCpu.h"
-#include "IfxScuWdt.h"
-#include "GTM_ATOM_PWM.h"
-#include "Bsp.h"
-
-#define WAIT_TIME   10              /* Number of milliseconds to wait between each duty cycle change                */
-
-IfxCpu_syncEvent g_cpuSyncEvent = 0;
 
 int core0_main(void)
 {
-    IfxCpu_enableInterrupts();
-
-    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable the watchdogs and service them periodically if it is required
-     */
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    /* Wait for CPU sync event */
-    IfxCpu_emitEvent(&g_cpuSyncEvent);
-    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
-
+    /*基本cpu的初始化 通用*/
     /* Initialize a time variable */
     Ifx_TickTime ticksFor10ms = IfxStm_getTicksFromMilliseconds(BSP_DEFAULT_TIMER, WAIT_TIME);
 
@@ -622,8 +632,6 @@ int core0_main(void)
 ```
 
 实验结果：LED1周期性的变亮和变暗，呼吸灯。
-
-
 
 ### 4.5、整合部分
 
@@ -690,16 +698,7 @@ IfxCpu_syncEvent g_cpuSyncEvent = 0;
 
 int core0_main(void)
 {
-    /* !!WATCHDOG0 AND SAFETY WATCHDOG ARE DISABLED HERE!!
-     * Enable the watchdogs and service them periodically if it is required
-     */
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    /* Wait for CPU sync event */
-    IfxCpu_emitEvent(&g_cpuSyncEvent);
-    IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
-
+    /*基本cpu的初始化 通用*/
     init_vadc();                /* 初始化VADC模块*/
     init_ASCLIN_UART();         /* 初始化串口*/
     IfxCpu_enableInterrupts();  /* 使能定中断在初始化之后 */
@@ -748,15 +747,11 @@ Ch.0: 3187  V:2.567
 
 <img src="./picture/LED1灯.jpg" title="" alt="" width="234"><img title="" src="./picture/LED2灯.jpg" alt="" width="235">
 
-
-
 ## 5、心得体会
 
 本次活动让我收获很多，不仅提高了我的专业能力，也让我对嵌入式多核心有了更深的理解。在本次项目中遇到了很多问题，每次遇到问题研究不出来想放弃的时候多和别人交流，问题就得到解决，让我明白和别人交流很有必要，闭门造车行不通。
 
 本次项目任务二并不复杂，明白功能模块分工后也很容易理清思路，而且板卡很强大有许多外设资源，可以在后续在基于这款板卡做延伸功能，给我的收获挺多的。
-
-
 
 参考资料：
 
@@ -767,5 +762,3 @@ document文件夹中包含参考资料。
 github：[GitHub - Harrypotter-zhs/Funkpack_2-2-TC275xxx](https://github.com/Harrypotter-zhs/Funkpack_2-2-TC275xxx.git)
 
 bilibili：
-
-
