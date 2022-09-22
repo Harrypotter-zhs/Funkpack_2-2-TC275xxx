@@ -522,8 +522,6 @@ ATOM的配置在设置阶段通过调用初始化完成一次
 
    `atomChannel` -选择驱动LED的通道(在本例中为channel 4)
 
-例子)
-
     `period`—将PWM信号的周期设置为所需值
 
     `pin.outputPin` -选择LED作为输出引脚
